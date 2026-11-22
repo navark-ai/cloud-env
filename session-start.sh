@@ -25,6 +25,7 @@ write_flow_values || problems="$problems values($VALUES_FILE)"
 start_mysql || problems="$problems mysql"
 start_redis || problems="$problems redis"
 start_web || problems="$problems web"
+repair_mailpit
 start_mailpit
 
 sync_output="$("$CLOUD_DIR/bin/cloud-sync" --no-restart 2>&1)"
@@ -36,7 +37,8 @@ done
 site_status="$(curl -s -L -o /dev/null -m 20 -w '%{http_code}' "$SITE_URL$SITE_CHECK_PATH")"
 [ "$site_status" = "200" ] || problems="$problems site(http-$site_status)"
 
-failed_steps="$(awk '$2 != 0 {print $1}' "$STATE_DIR/steps" 2>/dev/null | tr '\n' ' ')"
+# Mailpit is optional and repaired above: its own line below says whether it is there.
+failed_steps="$(awk '$2 != 0 && $1 != "install-mailpit" {print $1}' "$STATE_DIR/steps" 2>/dev/null | tr '\n' ' ')"
 
 sed \
     -e "s#__ROOT_DIR__#$ROOT_DIR#g" \
@@ -64,6 +66,7 @@ echo "## State of this VM"
 echo "- Started in $(($(date +%s) - started)) s. Snapshot made at $(cat "$STATE_DIR/setup-finished-at" 2>/dev/null || echo unknown)."
 echo "- Checkout: $(git rev-parse --short HEAD) on $(git branch --show-current 2>/dev/null | grep . || echo 'detached HEAD')."
 [ -n "$sync_output" ] && echo "- Sync: $sync_output"
+command -v mailpit >/dev/null || echo "- Mailpit could not be downloaded (see $LOG_DIR/repair-mailpit.log), so the site writes its mail to storage/logs (MAIL_MAILER=log). The next session start tries again. Nothing else depends on it: go on."
 [ -n "$problems" ] && echo "- PROBLEM, not up:$problems. Logs in $LOG_DIR/."
 [ -n "$failed_steps" ] && echo "- PROBLEM, setup steps that failed: $failed_steps. Logs in $LOG_DIR/."
 [ -z "$problems$failed_steps" ] && echo "- All services answer."
