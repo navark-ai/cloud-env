@@ -8,47 +8,13 @@
 
 set -uo pipefail
 
+CLOUD_ENV_SETUP=1
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+source "$CLOUD_DIR/packages.sh"
 
 : >"$STATE_DIR/steps"
+rm -f "$INSTALLED_FILE"
 date -u +%FT%TZ >"$STATE_DIR/setup-started-at"
-
-IMAGE_PHP_VERSION="8.3"
-IMAGE_MYSQL_VERSION="8.0"
-ONDREJ_PHP_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
-MYSQL_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBCA43417C3B485DD128EC6D4B7B3B788A8D3785C"
-
-php_packages() {
-    local extension
-
-    for extension in $PHP_EXTENSIONS; do
-        printf 'php%s-%s ' "$PHP_VERSION" "$extension"
-    done
-}
-
-add_apt_source() {
-    local name="$1" key_url="$2" source="$3"
-
-    curl -fsSL "$key_url" | gpg --dearmor --yes -o "/usr/share/keyrings/$name.gpg" || return 1
-    echo "deb [signed-by=/usr/share/keyrings/$name.gpg] $source" >"/etc/apt/sources.list.d/$name.list"
-}
-
-add_version_sources() {
-    if [ "$PHP_VERSION" != "$IMAGE_PHP_VERSION" ]; then
-        add_apt_source ondrej-php "$ONDREJ_PHP_KEY_URL" "https://ppa.launchpadcontent.net/ondrej/php/ubuntu noble main" || return 1
-    fi
-    if [ "$MYSQL_VERSION" != "$IMAGE_MYSQL_VERSION" ]; then
-        add_apt_source mysql "$MYSQL_KEY_URL" "http://repo.mysql.com/apt/ubuntu noble mysql-$MYSQL_VERSION-lts" || return 1
-    fi
-}
-
-mysql_packages() {
-    if [ "$MYSQL_VERSION" = "$IMAGE_MYSQL_VERSION" ]; then
-        echo "mysql-server-$MYSQL_VERSION"
-    else
-        echo "mysql-community-server"
-    fi
-}
 
 install_system_packages() {
     # dpkg fsyncs every file by default. The VM has nothing to protect at this point.
@@ -58,37 +24,14 @@ install_system_packages() {
     add_version_sources || return 1
     apt-get update -qq || return 1
     # shellcheck disable=SC2046,SC2086
-    apt-get install -y -qq --no-install-recommends $(php_packages) $(mysql_packages) $SYSTEM_PACKAGES $EXTRA_SYSTEM_PACKAGES || return 1
+    apt-get install -y -qq --no-install-recommends $(php_packages) $(database_packages) $SYSTEM_PACKAGES $EXTRA_SYSTEM_PACKAGES || return 1
     # An image can hold another PHP, and the project's version must answer to `php`.
-    update-alternatives --set php "/usr/bin/php$PHP_VERSION" || return 1
+    if [ "$STACK" = "laravel" ]; then
+        update-alternatives --set php "/usr/bin/php$PHP_VERSION" || return 1
+    fi
 
     # Debian blocks PDF reads by default; spatie/pdf-to-image needs them.
     sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-*/policy.xml 2>/dev/null || true
-}
-
-configure_php() {
-    local directory
-
-    for directory in "/etc/php/$PHP_VERSION/cli/conf.d" "/etc/php/$PHP_VERSION/fpm/conf.d"; do
-        cp "$CLOUD_DIR/config/php.ini" "$directory/99-cloud.ini"
-    done
-
-    sed -i -E \
-        -e 's/^user = .*/user = root/' \
-        -e 's/^group = .*/group = root/' \
-        -e 's/^listen\.owner = .*/listen.owner = root/' \
-        -e 's/^listen\.group = .*/listen.group = root/' \
-        -e 's/^pm\.max_children = .*/pm.max_children = 16/' \
-        "/etc/php/$PHP_VERSION/fpm/pool.d/www.conf"
-    mkdir -p /run/php
-}
-
-configure_nginx() {
-    sed -e "s#__ROOT_DIR__#$ROOT_DIR#" -e "s#__PHP_VERSION__#$PHP_VERSION#" "$CLOUD_DIR/config/nginx-site.conf" >/etc/nginx/sites-available/cloud
-    rm -f /etc/nginx/sites-enabled/default
-    ln -sf /etc/nginx/sites-available/cloud /etc/nginx/sites-enabled/cloud
-    sed -i 's/^user www-data;/user root;/' /etc/nginx/nginx.conf
-    nginx -t
 }
 
 configure_mysql() {
@@ -105,6 +48,45 @@ CREATE DATABASE IF NOT EXISTS \`$APP_DATABASE\` CHARACTER SET utf8mb4 COLLATE ut
 CREATE DATABASE IF NOT EXISTS \`$TEST_DATABASE\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 FLUSH PRIVILEGES;
 SQL
+}
+
+configure_postgres() {
+    local version cluster directory="/etc/postgresql/$POSTGRES_VERSION/main" marker="# cloud-env"
+
+    # Only the cluster of POSTGRES_VERSION stays, on the default port: the image ships 16, and a newer
+    # package creates its own cluster on 5433.
+    while read -r version cluster _; do
+        [ "$version" = "$POSTGRES_VERSION" ] && [ "$cluster" = "main" ] && continue
+        pg_dropcluster --stop "$version" "$cluster" || return 1
+    done < <(pg_lsclusters -h 2>/dev/null)
+    [ -d "$directory" ] || pg_createcluster "$POSTGRES_VERSION" main || return 1
+    pg_conftool "$POSTGRES_VERSION" main set port 5432 || return 1
+    mkdir -p "$directory/conf.d"
+    cp "$CLOUD_DIR/config/postgresql.conf" "$directory/conf.d/zz-cloud.conf"
+
+    # The site and the tests connect as postgres with no password, like root on MySQL.
+    if ! grep -q "^$marker" "$directory/pg_hba.conf"; then
+        { printf '%s\nlocal all all trust\nhost all all 127.0.0.1/32 trust\nhost all all ::1/128 trust\n' "$marker"; cat "$directory/pg_hba.conf"; } >"$directory/pg_hba.conf.new"
+        mv "$directory/pg_hba.conf.new" "$directory/pg_hba.conf"
+        chown postgres:postgres "$directory/pg_hba.conf"
+    fi
+
+    service postgresql stop >/dev/null 2>&1
+    start_postgres || return 1
+
+    local database
+    for database in "$APP_DATABASE" "$TEST_DATABASE"; do
+        [ -n "$(database_query "SELECT 1 FROM pg_database WHERE datname = '$database'" postgres)" ] && continue
+        createdb -h 127.0.0.1 -U postgres -E UTF8 -T template0 "$database" || return 1
+    done
+}
+
+configure_database() {
+    case "$DATABASE_ENGINE" in
+        mysql) configure_mysql ;;
+        pgsql) configure_postgres ;;
+        *) return 0 ;;
+    esac
 }
 
 install_mailpit() {
@@ -178,6 +160,7 @@ import json, os, sys
 
 cloud_dir = sys.argv[1]
 settings_path = '/root/.claude/settings.json'
+os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 existing = json.load(open(settings_path)) if os.path.exists(settings_path) else {}
 wanted = json.load(open(f'{cloud_dir}/config/claude-settings.json'))
 
@@ -214,6 +197,7 @@ write_env_file() {
         [ "$USES_REVERB" = "true" ] && sed -e "s#__APP_DATABASE__#$APP_DATABASE#" "$CLOUD_DIR/env.reverb"
         # With no worker on the queue, nothing reads a Redis queue.
         has_worker 'horizon|queue:' || echo "QUEUE_CONNECTION=sync"
+        database_env
         sed -e "s#__SITE_URL__#$SITE_URL#" -e "s#__APP_DATABASE__#$APP_DATABASE#" -e "s#__APP_TITLE__#$title#" "$CLOUD_DIR/env.defaults"
     } | awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { if (seen[$1]++) next } { print }' >"$ROOT_DIR/.env"
 }
@@ -228,7 +212,7 @@ detect_project() {
 detect_login() {
     local email hash password
 
-    IFS=$'\t' read -r email hash < <(mysql -uroot -N -B "$APP_DATABASE" -e "SELECT email, password FROM users ORDER BY id LIMIT 1" 2>/dev/null)
+    IFS=$'\t' read -r email hash < <(database_query "SELECT email, password FROM users ORDER BY id LIMIT 1" 2>/dev/null)
     [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || return 0
 
     password="$(php "$CLOUD_DIR/find-seeded-password.php" "$hash")" || return 0
@@ -288,12 +272,29 @@ remember_fingerprints() {
     return 0
 }
 
+# The custom stack: the project's functions, from stacks/custom.sh or its .claude/cloud.sh.
+install_project_dependencies() {
+    cd "$ROOT_DIR" || return 1
+    install_dependencies
+}
+
+prepare_custom_application() {
+    cd "$ROOT_DIR" || return 1
+    install_application
+}
+
+remember_custom_fingerprints() {
+    # shellcheck disable=SC2086
+    step_succeeded install-dependencies && remember_state dependencies "$(fingerprint $DEPENDENCY_FILES)"
+    step_succeeded prepare-application && remember_state migrations "$(migrations_fingerprint)"
+    return 0
+}
+
 # Stops cleanly so the snapshot holds a consistent data directory.
 stop_services() {
-    stop_mysql_server
+    stop_database
     service redis-server stop
-    pkill -x nginx 2>/dev/null
-    pkill -x "php-fpm$PHP_VERSION" 2>/dev/null
+    stop_web
     return 0
 }
 
@@ -309,7 +310,7 @@ step configure-claude configure_claude
 if [ -z "$ROOT_DIR" ]; then
     # The snapshot stays bare until the environment's setup script changes, and session-start.sh
     # tells the agent.
-    echo "cloud-env: no Laravel project under /home/user, so no project was installed." | tee "$LOG_DIR/no-project.log"
+    echo "cloud-env: no repository under /home/user, so no project was installed." | tee "$LOG_DIR/no-project.log"
     exit 0
 fi
 
@@ -324,11 +325,28 @@ step install-browser-tools install_browser_tools &
 step install-skills install_skills &
 step install-mailpit install_mailpit &
 step install-system-packages install_system_packages
-step configure-php configure_php
-step configure-nginx configure_nginx
-step configure-mysql configure_mysql
+step_succeeded install-system-packages && write_installed_versions
+if [ "$STACK" = "laravel" ]; then
+    step configure-php configure_php
+    step configure-nginx configure_nginx
+fi
+[ "$DATABASE_ENGINE" = "none" ] || step configure-database configure_database
 step start-redis start_redis
 wait
+
+if [ "$STACK" = "custom" ]; then
+    step install-dependencies install_project_dependencies
+    step build-assets build_assets &
+    step prepare-application prepare_custom_application && step seed-demo-data seed_demo_data
+    wait
+
+    step remember-fingerprints remember_custom_fingerprints
+    step stop-services stop_services
+
+    date -u +%FT%TZ >"$STATE_DIR/setup-finished-at"
+    git -C "$ROOT_DIR" status --short >"$LOG_DIR/git-status-after-setup.log" 2>&1
+    exit 0
+fi
 
 # .env must exist before composer: its post-install script boots the framework.
 [ -f .env ] || step write-env-file write_env_file

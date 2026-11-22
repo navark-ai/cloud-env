@@ -18,6 +18,7 @@
       "Bash(vendor/bin/*)",
       "Bash(./vendor/bin/*)",
       "Bash(mysql *)",
+      "Bash(psql *)",
       "Bash(redis-cli *)",
       "Bash(curl *)",
       "Bash(ffmpeg *)",

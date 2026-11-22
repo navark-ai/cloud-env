@@ -52,7 +52,8 @@ def log(event, message):
 
 
 def project_root():
-    """$CLAUDE_PROJECT_DIR, else what lib.sh finds: the root saved by setup.sh, else /home/user/*/artisan."""
+    """$CLAUDE_PROJECT_DIR, else what lib.sh finds: the root saved by setup.sh, else /home/user/*/artisan,
+    else /home/user/*/.git."""
     if os.environ.get('CLAUDE_PROJECT_DIR'):
         return pathlib.Path(os.environ['CLAUDE_PROJECT_DIR'])
     try:
@@ -63,6 +64,9 @@ def project_root():
         pass
     for candidate in sorted(glob.glob('/home/user/*/artisan')):
         if os.path.isfile(candidate):
+            return pathlib.Path(candidate).parent
+    for candidate in sorted(glob.glob('/home/user/*/.git')):
+        if os.path.exists(candidate):
             return pathlib.Path(candidate).parent
     return None
 

@@ -1,8 +1,8 @@
 # Navark cloud environment
 
-A Claude Code cloud session on this environment has what a MacBook has: MySQL, PHP, Redis, Mailpit, nginx, built assets, the project's workers, Laravel Boost, headless Chromium with video. A Navark ticket can go from A to Z there with no person watching.
+A Claude Code cloud session on this environment has what a MacBook has: PHP, MySQL or PostgreSQL, Redis, Mailpit, nginx, built assets, the project's workers, Laravel Boost, headless Chromium with video. A Navark ticket can go from A to Z there with no person watching.
 
-A standard Laravel project needs no file: the VM reads what it needs from the project's own files, and everything else is here. A multi-tenant project needs a file: see below. Claude Code has no built-in way to share this: [cloud sessions do not install plugins, the base image cannot be replaced, and the environment's variables do not exist yet when the setup script runs](https://code.claude.com/docs/en/cloud-environments). So the setup script clones this public repository at a fixed version.
+A standard Laravel project needs no file: the VM reads what it needs from the project's own files, and everything else is here. A multi-tenant project needs a file: see below. A project on another stack (Python, Node, Ruby, Go, ...) gets the same guard, hooks, browser, Redis, Mailpit and database, and says in one file how to install and run it: see "Stacks". Claude Code has no built-in way to share this: [cloud sessions do not install plugins, the base image cannot be replaced, and the environment's variables do not exist yet when the setup script runs](https://code.claude.com/docs/en/cloud-environments). So the setup script clones this public repository at a fixed version.
 
 This repository is public so the setup script can reach it. Keep it free of secrets and of client data.
 
@@ -10,7 +10,7 @@ This repository is public so the setup script can reach it. Keep it free of secr
 
 **From Navark.** Add the label `agent:ready` to a top-level issue in status `Todo`, in a project whose worker is set up in Navark (see "Add a project"). Navark checks every minute and calls the project's worker: the ticket starts within a minute, at most 3 tickets per project at a time, one run per ticket. To go now: **Run the check now** in the project's agent setup. This path needs no approval.
 
-**One ticket, by hand.** On claude.ai/code, start a session with the environment `Navark Laravel`, the project's repository, the branch `dev` and the mode `Auto`. This path can stop at a Navark write for your approval, so keep the session open.
+**One ticket, by hand.** On claude.ai/code, start a session with the environment `Navark`, the project's repository, the branch `dev` and the mode `Auto`. This path can stop at a Navark write for your approval, so keep the session open.
 
 ```
 Take the Navark ticket <identifier> from A to Z: call get_flow of the Navark connector with it, run the command it returns, then read .scratch/flow/FLOW.md and follow it.
@@ -33,21 +33,26 @@ A ticket with open product questions comes back to `Todo` without its labels, wi
 | Part | When it runs |
 |---|---|
 | `environment-setup.sh` | Pasted in the environment dialog. Runs before Claude Code starts, when no snapshot exists. Clones this repository at a version, then calls `setup.sh` |
-| `detect.py`, `find-seeded-password.php` | Same, once per snapshot. Read the project's values from its own files |
-| `setup.sh`, `defaults.sh`, `env.defaults`, `env.reverb` | Same. Install packages, dependencies, databases, demo data, assets and skills. The platform then snapshots the disk. About 3.5 minutes on a large project |
-| `session-start.sh`, `session-context.md` | A hook in the VM's `~/.claude/settings.json`, at every session start and resume. Writes the values file of the flow, starts the services, runs `cloud-sync`, gives the agent its context, which says how to get the ticket flow |
+| `detect.py`, `find-seeded-password.php` | Same, once per snapshot. Read the project's stack and values from its own files |
+| `setup.sh`, `packages.sh`, `defaults.sh`, `stacks/`, `env.defaults`, `env.reverb` | Same. Install packages, dependencies, databases, demo data, assets and skills, for the project's stack (`stacks/<stack>.sh`). The platform then snapshots the disk. About 3.5 minutes on a large project |
+| `stacks.json` | Read by Navark's setup wizard: the stacks, versions and databases of this version, and the references for the stacks it does not cover |
+| `session-start.sh`, `session-context.md` | A hook in the VM's `~/.claude/settings.json`, at every session start and resume. Writes the values file of the flow, compares the versions the checkout asks for with the snapshot's ("Versions after a push"), starts the services, runs `cloud-sync`, gives the agent its context, which says how to get the ticket flow |
 | `bin/cloud-sync` | After every checkout. Updates only what changed: Composer, npm, migrations, assets. Then restarts the workers, checks that they are up, and says `FAILED` for a step or a worker that did not work |
 | `hooks/flow-hook.py` | At seven hook events of Claude Code (`SessionStart`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `SessionEnd`). Runs the common part of the flow's hook for that event, if there is one, and never changes the session. See "The flow" |
 | `hooks/guard-bash.py`, `git-hooks/pre-push` | Before every command and every push. Refuse a merge, a push to a release branch, a branch deletion, and every tool of the remote session server except the pull request subscription. Let through one merge: a pull request from a `feat/` or `fix/` branch into `dev` whose checks all passed, for the auto-merge |
 | The ticket flow, not in this repository | Navark serves it at each run (`get_flow`): the instructions (`FLOW.md`, `build.md`, `review.md`, `adaptive.md`, `brief.md`) and the tools they call (`bin/pr-status`, `bin/demo-video`, the demo recorder, the Loom script). See "The flow" |
-| `config/` | PHP, MySQL, nginx and Claude Code settings. These exist only in the VM, so nothing changes on a Mac |
+| `config/` | PHP, MySQL, PostgreSQL, nginx and Claude Code settings. These exist only in the VM, so nothing changes on a Mac |
+| `tests/vm/` | Not in the VM. Runs `setup.sh` and `session-start.sh` in a stand-in of the image with Docker, once per combination of "Stacks" |
 
 ### What the VM reads from a project
 
 | Value | Rule | Otherwise |
 |---|---|---|
+| `STACK` | `laravel` when the repository has `artisan`, `custom` for any other repository (see "Stacks") | `laravel` |
+| `DATABASE_ENGINE` | `DB_CONNECTION` of `.env.example` (`pgsql`, or `mysql` for `mysql` and `mariadb`), then the first `mysql:` or `postgres:` image in `.github/workflows` | `mysql`; `none` for a custom project |
 | `PHP_VERSION` | The newest `8.x` in `require.php` of `composer.json`, or a higher floor that a package in `composer.lock` needs | 8.3 |
 | `MYSQL_VERSION` | The first `mysql:x.y` in `.github/workflows`, files in name order, when it is 8.0 or 8.4 | 8.0 |
+| `POSTGRES_VERSION` | The first `postgres:NN` (or `postgis/postgis:NN`) in `.github/workflows`, when it is 16, 17 or 18 | 16 |
 | `APP_DATABASE` | The repository's name, with `_` for what is not a letter or a digit | `app` |
 | `APP_TITLE`, for `APP_NAME` | The repository's name, in words, then `Cloud` | `Cloud VM` |
 | `install_application` | `artisan install --seed` when the install command has the signature `install {--seed}` | `artisan migrate --seed` |
@@ -60,9 +65,9 @@ A ticket with open product questions comes back to `Todo` without its labels, wi
 | `SITE_LOGIN_EMAIL` | The first user, after the install | No login |
 | `SITE_LOGIN_PASSWORD` | The string in the install command, the seeders or `UserFactory` that matches this user's hash. It stays in the project, not in this public repository | No login, and the agent is told so |
 
-The values are kept in `/var/lib/cloud-env/detected.sh`, so a later checkout does not change them. The session context shows the login, the landing path and the workers. `PROBLEM` there names a step or a service that failed.
+The values are kept in `/var/lib/cloud-env/detected.sh`, so a later checkout does not change them, and what `setup.sh` installed (stack, PHP, database server) in `/var/lib/cloud-env/installed.sh`. The session context shows the login, the landing path and the workers. `PROBLEM` there names a step or a service that failed.
 
-An optional `.claude/cloud.sh` in the project replaces any value or function of `defaults.sh`, and adds notes for the agent: see `templates/cloud.sh`. It is not needed on every branch, because a copy stays in the VM.
+An optional `.claude/cloud.sh` in the project replaces any value of `defaults.sh` or function of its stack (`stacks/laravel.sh`), and adds notes for the agent: see `templates/cloud.sh`. It is not needed on every branch, because a copy stays in the VM.
 
 A multi-tenant project needs this file. A typical one has a seeder that cannot run outside a tenant, central routes bound to one host, and an install command that takes a name, an email and a password. So its file sets `project_env`, `install_application`, the login and the landing path.
 
@@ -73,6 +78,76 @@ Three things in this design come from how the VM works:
 - **Composer.** In a session, `api.github.com` and `codeload.github.com` answer 403 for a repository that is not attached, and `composer install` falls back to git for each package, about 13 minutes. The setup script is not behind that proxy, so `bin/composer-install --setup` uses `codeload` and takes about 20 seconds. A later lock change in a session uses git, for the changed packages only.
 - **GitHub.** The proxy refuses GraphQL, so `gh pr` and `gh issue` fail. Agents use the `mcp__github__*` tools and `gh api repos/...`.
 - **Skills.** Cloud sessions install no plugin. The ticket flow is not a skill and does not live here: Navark serves it (see "The flow"), so it changes with a Navark deploy, not with `CLOUD_ENV_VERSION`. `setup.sh` clones the public skill repositories (`SKILL_REPOSITORIES`) and links them in `~/.claude/skills`, for the project conventions they hold. A project adds its own with `SKILL_REPOSITORIES` in `.claude/cloud.sh`. The project's own skills win on a name collision. Private repositories are not reachable there.
+
+## Stacks
+
+One environment serves every stack: the VM reads the stack of each repository (`STACK`, "What the VM reads from a project"), and the snapshot is per repository and per branch. `stacks.json` says the same as this section for a program, such as Navark's setup wizard.
+
+| Stack | Detected by | Project file | What the VM sets up |
+|---|---|---|---|
+| `laravel` | `artisan` at the root | Optional, `templates/cloud.sh` | PHP 8.2 to 8.5 with php-fpm and nginx, Composer and npm dependencies, built assets, MySQL or PostgreSQL with migrations and seeds, Horizon and Reverb when the project has them |
+| `custom` | Any other repository | `.claude/cloud.sh`, from `templates/custom.sh` | The database, the dependencies of each lock file, the tools of a `mise.toml`, then what the project's file says: install, migrations, workers, site |
+
+Both get the guard, the hooks of the flow, Chromium with Playwright, Redis, Mailpit, the skills and the values file of the flow.
+
+### Laravel: PHP and database
+
+| PHP | MySQL 8.0 | MySQL 8.4 | PostgreSQL 16 | PostgreSQL 17 | PostgreSQL 18 |
+|---|---|---|---|---|---|
+| 8.2 | Passes | Passes | Not run | Not run | Not run |
+| 8.3, the image's | Passes | Passes | Not run | Not run | Not run |
+| 8.4 | Passes | Passes | Passes | Passes | Passes |
+| 8.5 | Passes | Passes | Not run | Not run | Not run |
+
+`tests/vm` ran each combination marked here on 2026-11-22, in a stand-in of the image (Ubuntu 24.04 amd64 with PHP 8.3, MySQL 8.0, PostgreSQL 16 and Redis, under Docker) with a Laravel 12 project. A combination passes when every setup step exits 0, `php` and php-fpm are the version asked, the extensions load, the server is the version asked, the migrations ran on both databases, the cache and the sessions go through Redis, the site answers 200, the assets are built and `cloud-sync` says `ok`. In the real image, only the projects of the earlier live tests have run (PHP 8.3 and MySQL 8.0 by default): try another combination in a second environment first ("Change it"). Under emulation the setup took 2 to 14 minutes, which says nothing about the real VM, but each version from another source adds about a minute there: a large project on PHP 8.5 and MySQL 8.4 can pass the five minutes after which the platform keeps no snapshot. `setup-started-at` and the times in `steps` show it.
+
+- **PHP.** 8.3 is the image's. 8.2, 8.4 and 8.5 come from the Ondřej Surý source, about a minute more. PHP 8.5 has OPcache built in, with no `php8.5-opcache` package: `setup.sh` leaves it out from 8.5.
+- **MySQL.** 8.0 is the image's. 8.4 comes from the MySQL LTS source, and replaces the image's server.
+- **PostgreSQL.** 16 is the image's. 17 and 18 come from the PostgreSQL source (PGDG), and `setup.sh` drops the image's cluster so the one asked listens on 5432. The site and the tests connect as `postgres` with no password, like `root` on MySQL, and `setup.sh` adds `pgsql` to the PHP extensions. A Laravel project on PostgreSQL says so in `.env.example` (`DB_CONNECTION=pgsql`) or with a `postgres:NN` image in its CI; otherwise `DATABASE_ENGINE="pgsql"` in `.claude/cloud.sh`.
+
+### Versions after a push
+
+A push does not make a new snapshot: the platform makes one only when the environment's setup script or its allowed hosts change, or after about 7 days. So a session on a new commit has the new code (`cloud-sync` catches up Composer, npm, migrations and assets) and the packages of the last snapshot. A session always runs on what the snapshot installed (`installed.sh`), whatever the checkout asks for. At every session start, `session-start.sh` reads again what the checkout asks for (a new detection, then `.claude/cloud.sh`) and compares:
+
+| The checkout asks for another | This session | The agent reads |
+|---|---|---|
+| PHP | Installs it and serves the site with it, about a minute at each new VM, until a new snapshot has it. If that fails, it stays on the snapshot's PHP | `WARNING: the checkout asks for PHP 8.4, and this snapshot has PHP 8.3. This session installed PHP 8.4, ...` |
+| Database engine or version | Keeps the snapshot's server, and names it in the context: a server is never replaced in a session, its data would not follow | `WARNING: the checkout asks for MySQL 8.4, and this snapshot has MySQL 8.0, which this session uses. ...` |
+| Stack | Keeps the snapshot's | `WARNING: the checkout is a custom project, and this snapshot was set up for the laravel stack. ...` |
+
+Each warning ends with the way out: a new snapshot, by changing the number in the environment's setup script ("Change it"). That rebuilds the snapshot of every project, so do it once the change is merged into the branch the sessions start from. `tests/vm` runs this case (`version-change`): a snapshot on PHP 8.3 and MySQL 8.0, then a commit that asks for PHP 8.4 and MySQL 8.4. Every warning of this repository is in English, like the rest of the session context.
+
+### Another stack
+
+A repository with no `artisan` is a `custom` project. The VM does not guess how to run it: its `.claude/cloud.sh` says so, on the branch the sessions start from, since `setup.sh` reads it before the snapshot. Copy `templates/custom.sh`; `templates/custom-django.sh` is a complete example, the one `tests/vm` runs (Django on PostgreSQL 16, its admin as the site).
+
+| In `.claude/cloud.sh` | What it is | Otherwise |
+|---|---|---|
+| `DATABASE_ENGINE`, `MYSQL_VERSION`, `POSTGRES_VERSION` | `mysql`, `pgsql` or `none`, and the version, as for Laravel. `APP_DATABASE` and `TEST_DATABASE` are created empty | Read from the CI's database image, else `none` |
+| `EXTRA_SYSTEM_PACKAGES` | apt packages on top of the image | None |
+| `install_dependencies` | Installs the dependencies | The package manager of each lock file: `npm`, `pnpm`, `yarn`, `uv`, `poetry`, `pip` with `requirements.txt` into `.venv`, `bundle`, `go mod download`. First, with a `mise.toml`, `.mise.toml` or `.tool-versions`, mise and its tools |
+| `install_application`, `install_demo_data` | Fill the database once per snapshot, with the services up | Nothing |
+| `migrate_databases`, `MIGRATION_PATHS` | Migrations on both databases; `cloud-sync` runs them again when a path of `MIGRATION_PATHS` changes | No migration |
+| `background_workers` | The site and the workers, `<name>\|<command>\|<port>` per line, as for Laravel. The site is a worker: no nginx or PHP is installed | None |
+| `SITE_URL`, `SITE_CHECK_PATH`, `SITE_LOGIN_*`, `SITE_LANDING_PATH` | The site for the session check, the videos and the agent | No site check and no login |
+| `build_frontend` | Builds assets once per snapshot | Nothing |
+| `sync_project` | Replaces what `cloud-sync` does: by default the dependencies again when a lock file changed, then `migrate_databases` | |
+| `project_context` | Notes for the agent: how to run the tests, what does not work | |
+
+The image already holds Python 3 with pip, uv and poetry, Node 20 to 22, Ruby 3.1 to 3.3 with bundler, Go, Rust and Java 21. mise covers any other version: it is installed from its signed apt repository (`extrepo`), never through a piped script, and its shims go first in the agent's `PATH`. `tests/vm` runs two custom projects: the Django example, and a Node site whose `.tool-versions` asks for Node 20 through mise. Ruby, Go and the package managers other than npm and pip have not run yet. mise downloads each tool from its own host: Node from `nodejs.org` is in the allowlist, and another tool may need its host added.
+
+### Your own environment
+
+An environment can have its own setup script, written from [the cloud environment docs](https://code.claude.com/docs/en/cloud-environments). To keep the guard, the hooks of the Navark flow and its values file, end that script with the three lines of `environment-setup.sh` that clone this repository and run `setup.sh`: the project's own steps run first, and `setup.sh` adds the rest. Without them, a session has no guard, no values file for the flow's tools, and none of the flow's hooks, which send the run's transcripts to Navark.
+
+### Stacks this repository does not cover
+
+These open-source projects are not run by this repository and Navark does not support them, but they help write a project's file or a setup script:
+
+- [mise](https://mise.jdx.dev): the version of any language or tool, from a `mise.toml`. Already used by the `custom` stack.
+- [Dev Container Features](https://containers.dev/features): install scripts per tool (languages, CLIs, databases) kept by the Dev Containers community. A source of commands to copy into `EXTRA_SYSTEM_PACKAGES` or `install_dependencies`.
+- [Railpack](https://github.com/railwayapp/railpack), Railway's builder: how a project of each language is detected, installed and started. A reference for `install_dependencies` and `background_workers`.
+- The image ships Docker and Docker Compose, so a service with no apt package (MongoDB, Elasticsearch) could run as a container from a worker. This has not been tried in a cloud VM.
 
 ## The flow
 
@@ -107,14 +182,14 @@ What this repository gives the flow, and what a flow may count on:
 
 ## Add a project
 
-1. **Create the project's worker** below, with the environment `Navark Laravel` and an API trigger.
+1. **Create the project's worker** below, with the environment `Navark` and an API trigger.
 2. **Paste its fire URL and token in Navark**: on the project's page, **Set up agent**. The wizard there walks through the whole setup, the Navark connector first, with screenshots, and Navark keeps the token encrypted.
 3. **Set the lead of the Navark project.** The agent assigns the tickets to that person when the pull request has settled or come to rest: at the hand-off at the end of the first turn, or in a later wave. With no lead, it sets the original assignees back and says `Aucun lead sur le projet`.
-4. **Optional:** add `.claude/cloud.sh` for notes or for a value that detection gets wrong.
+4. **A Laravel project, optional:** add `.claude/cloud.sh` for notes or for a value that detection gets wrong. **Another stack, required:** add `.claude/cloud.sh` from `templates/custom.sh` to the branch the sessions start from (see "Stacks").
 
-The first project also creates the environment. In Navark, an admin adds a GitHub token in Settings › GitHub, once for the workspace: without it, a linked pull request shows only its url, not its state. The environment `Navark Laravel`, once for all projects, on claude.ai/code: environment selector, then **New environment**.
+The first project also creates the environment. In Navark, an admin adds a GitHub token in Settings › GitHub, once for the workspace: without it, a linked pull request shows only its url, not its state. The environment `Navark`, once for all projects and all stacks, on claude.ai/code: environment selector, then **New environment**.
 
-- **Name**: `Navark Laravel`.
+- **Name**: `Navark`. The name does not matter to the VM: an environment made before v3.1.0, named `Navark Laravel`, only needs the new setup script.
 - **Network access**: `Limited` (`Custom` in older apps), keep "Allow package managers" on, and paste `allowed-domains.txt` in **Allowed domains**.
 - **Setup script**: paste `environment-setup.sh`.
 - No variable and no secret.
@@ -127,7 +202,7 @@ They belong to one account. Give each task only the connectors it needs: the wor
 
 | Task | Model | Environment | Repository | Trigger | Prompt |
 |---|---|---|---|---|---|
-| Worker, one for each project | Opus | `Navark Laravel` | The project's | API, with a token | See below |
+| Worker, one for each project | Opus | `Navark` | The project's | API, with a token | See below |
 
 Worker prompt, the same for each project:
 
@@ -156,13 +231,14 @@ These limits decide this shape, all seen in live tests:
 
 - **The flow:** a pull request on Navark, in `resources/flows/default/`. It reaches every worker at Navark's next deploy: no version here, no new snapshot. A run that already downloaded the flow keeps its copy.
 - **A new version:** change `CLOUD_ENV_VERSION` in the environment's setup script. That text change also forces a new snapshot, for every project. There is no API for it, so a person or a browser agent edits the dialog. One environment means a release reaches every project at once: to try one first, create a second environment with the new version and run one session of a project there.
-- **A project value:** edit `.claude/cloud.sh`. Each session reads it at start. What only `setup.sh` uses, such as packages, needs a new snapshot: change the number in the setup script, which rebuilds every project's snapshot. A new snapshot also detects the values again, so do the same after a change of PHP version or a new worker package.
+- **A project value:** edit `.claude/cloud.sh`. Each session reads it at start. What only `setup.sh` uses, such as packages, needs a new snapshot: change the number in the setup script, which rebuilds every project's snapshot. A new snapshot also detects the values again, so do the same after a change of PHP or database version or a new worker package. Until then, a session installs a new PHP itself and warns about the rest ("Versions after a push").
+- **This repository:** run `python3 -m unittest discover tests`, then `tests/vm/run-matrix.sh` (Docker) for a change of `setup.sh`, `lib.sh`, `stacks/` or a version. Keep `stacks.json` in step with the "Stacks" section: `tests/test_manifest.py` checks the versions.
 - **A new host:** edit **Allowed domains**. It opens the host to every project. Keep third-party systems that act on real accounts blocked: billing, payment, SMS and production APIs.
 
 ## Limits
 
 - 4 vCPU, 16 GB, 30 GB. The VM is reclaimed when idle: push before waiting.
-- The image's apt sources ship PHP 8.3 and MySQL 8.0. For another version, `setup.sh` adds the Ondřej Surý source for PHP, or the MySQL LTS source for MySQL.
+- The image's apt sources ship PHP 8.3, MySQL 8.0 and PostgreSQL 16. For another version, `setup.sh` adds the Ondřej Surý source for PHP, the MySQL LTS source for MySQL, or the PostgreSQL source (PGDG).
 - No preview URL for a person: the videos replace it.
 - An attachment of a ticket is read through Navark's `create_download`: it returns a url signed for 10 minutes, the VM fetches the file with `curl`, and no Navark token enters the VM. With a Navark that has no such tool, the agent names the attachment under "Non vérifié", and gives the ticket back with a question when it cannot be understood without the file.
 - Sub-agents share one VM and one `test` database, so implement sub-agents run one after another. A sub-agent cannot start another sub-agent.
