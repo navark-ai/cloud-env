@@ -89,16 +89,6 @@ configure_database() {
     esac
 }
 
-install_mailpit() {
-    local version archive
-
-    version="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/axllent/mailpit/releases/latest | sed 's#.*/##')"
-    archive="$(mktemp)"
-    curl -fsSL -o "$archive" "https://github.com/axllent/mailpit/releases/download/$version/mailpit-linux-amd64.tar.gz" || return 1
-    tar -xzf "$archive" -C /usr/local/bin mailpit
-    rm -f "$archive"
-}
-
 install_browser_tools() {
     local failed=0
 
@@ -230,7 +220,7 @@ install_js_dependencies() {
 prepare_application() {
     cd "$ROOT_DIR" || return 1
 
-    command -v mailpit >/dev/null || sed -i 's/^MAIL_MAILER=.*/MAIL_MAILER=log/' .env
+    command -v mailpit >/dev/null || use_mail_log
     php artisan key:generate --force --no-interaction
     # Passport signs personal access tokens and OAuth tokens with these keys; without them, creating a token or
     # calling an API with one fails with "Invalid key supplied". The files are git-ignored.

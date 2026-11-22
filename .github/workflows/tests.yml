@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    # The cloud VM runs Ubuntu: the scripts rely on GNU tools such as `sed -i`.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the shell scripts parse
+        run: for file in *.sh bin/* git-hooks/*; do bash -n "$file"; done
+      - name: Run the tests
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.test"
+          python3 -m unittest discover -v tests
