@@ -182,6 +182,40 @@ start_web() {
     pgrep -x nginx >/dev/null || nginx
 }
 
+# GitHub's download host can reset an HTTP/2 stream mid-file (curl: (92) ... INTERNAL_ERROR), and the
+# snapshot would keep that failure. HTTP/1.1 and a few retries get through.
+download() {
+    curl -fsSL --http1.1 --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$2" "$1"
+}
+
+install_mailpit() {
+    local archive status
+
+    archive="$(mktemp)" || return 1
+    download https://github.com/axllent/mailpit/releases/latest/download/mailpit-linux-amd64.tar.gz "$archive" \
+        && tar -xzf "$archive" -C /usr/local/bin mailpit
+    status=$?
+    rm -f "$archive"
+    return "$status"
+}
+
+# Without Mailpit the site sends its mail to the log. The marker says the project did not ask for that.
+use_mail_log() {
+    sed -i 's/^MAIL_MAILER=.*/MAIL_MAILER=log/' "$ROOT_DIR/.env"
+    touch "$STATE_DIR/mail-log-fallback"
+}
+
+# Mailpit is optional, so a failed install never stops a session: each session start tries it again,
+# and a success puts the mail back on Mailpit.
+repair_mailpit() {
+    command -v mailpit >/dev/null && return 0
+    install_mailpit >"$LOG_DIR/repair-mailpit.log" 2>&1 || return 1
+    if [ -f "$STATE_DIR/mail-log-fallback" ]; then
+        sed -i 's/^MAIL_MAILER=log$/MAIL_MAILER=smtp/' "$ROOT_DIR/.env"
+        rm -f "$STATE_DIR/mail-log-fallback"
+    fi
+}
+
 start_mailpit() {
     command -v mailpit >/dev/null || return 0
     pgrep -x mailpit >/dev/null && return 0

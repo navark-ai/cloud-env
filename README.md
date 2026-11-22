@@ -60,7 +60,7 @@ A ticket with open product questions comes back to `Todo` without its labels, wi
 | `SITE_LOGIN_EMAIL` | The first user, after the install | No login |
 | `SITE_LOGIN_PASSWORD` | The string in the install command, the seeders or `UserFactory` that matches this user's hash. It stays in the project, not in this public repository | No login, and the agent is told so |
 
-The values are kept in `/var/lib/cloud-env/detected.sh`, so a later checkout does not change them. The session context shows the login, the landing path and the workers. `PROBLEM` there names a step or a service that failed.
+The values are kept in `/var/lib/cloud-env/detected.sh`, so a later checkout does not change them. The session context shows the login, the landing path and the workers. `PROBLEM` there names a step or a service that failed. Mailpit is the exception: it is optional, so a failed download is retried at every session start, mail goes to the log meanwhile, and the session context says so without `PROBLEM`.
 
 An optional `.claude/cloud.sh` in the project replaces any value or function of `defaults.sh`, and adds notes for the agent: see `templates/cloud.sh`. It is not needed on every branch, because a copy stays in the VM.
 
