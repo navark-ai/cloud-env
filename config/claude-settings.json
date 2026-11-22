@@ -1,0 +1,147 @@
+{
+  "env": {
+    "COMPOSER_ALLOW_SUPERUSER": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "300000",
+    "BASH_MAX_TIMEOUT_MS": "1800000",
+    "NODE_PATH": "/opt/node22/lib/node_modules"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh api *)",
+      "Bash(php *)",
+      "Bash(herd *)",
+      "Bash(composer *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(vendor/bin/*)",
+      "Bash(./vendor/bin/*)",
+      "Bash(mysql *)",
+      "Bash(redis-cli *)",
+      "Bash(curl *)",
+      "Bash(ffmpeg *)",
+      "Bash(ffprobe *)",
+      "Bash(stat *)",
+      "Bash(cloud-sync*)",
+      "Bash(.scratch/flow/bin/*)",
+      "Bash(./.scratch/flow/bin/*)",
+      "Bash(.scratch/flow/core/bin/*)",
+      "Bash(./.scratch/flow/core/bin/*)",
+      "mcp__laravel-boost",
+      "mcp__playwright",
+      "mcp__Navark",
+      "mcp__github",
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "mcp__claude-code-remote__unsubscribe_pr_activity",
+      "mcp__Claude_Code_Remote__subscribe_pr_activity",
+      "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
+      "Workflow"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "laravel-boost"
+  ],
+  "disabledMcpjsonServers": [
+    "herd"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash __CLOUD_DIR__/session-start.sh",
+            "timeout": 600
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py SessionStart",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit|mcp__github__.*|mcp__.*merge.*|mcp__claude-code-remote__.*|mcp__Claude_Code_Remote__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/guard-bash.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py Stop",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py SubagentStart",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py SubagentStop",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py PreCompact",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py PostCompact",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I __CLOUD_DIR__/hooks/flow-hook.py SessionEnd"
+          }
+        ]
+      }
+    ]
+  }
+}
