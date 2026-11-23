@@ -2,9 +2,12 @@
 # Provisions the cloud VM. The environment's setup script calls this once per snapshot, before
 # Claude Code starts. Anthropic then keeps the disk, so later sessions start with all of this in place.
 #
-# It always exits 0: a non-zero exit stops every session from starting. A step that fails is
-# recorded in /var/lib/cloud-env/steps and session-start.sh reports it to the agent.
-# The snapshot is only kept when this finishes in about five minutes, so what can run together does.
+# It exits 0 whatever fails but the system packages: a non-zero exit stops the session from starting. A
+# step that fails is recorded in /var/lib/cloud-env/steps and session-start.sh reports it to the agent.
+# Without the system packages nothing else can work, and an exit 0 would keep that VM as the project's
+# snapshot for a week: there the script exits 1, the platform keeps nothing and the next session tries again.
+# The snapshot is only kept when this finishes in about five minutes, so what can run together does, and
+# every download has a time limit.
 
 set -uo pipefail
 
@@ -22,9 +25,9 @@ install_system_packages() {
     printf 'path-exclude=/usr/share/doc/*\npath-exclude=/usr/share/man/*\n' >/etc/dpkg/dpkg.cfg.d/no-docs
 
     add_version_sources || return 1
-    apt-get update -qq || return 1
+    apt_get "$APT_UPDATE_LIMIT" update -qq || return 1
     # shellcheck disable=SC2046,SC2086
-    apt-get install -y -qq --no-install-recommends $(php_packages) $(database_packages) $SYSTEM_PACKAGES $EXTRA_SYSTEM_PACKAGES || return 1
+    apt_get "$APT_INSTALL_LIMIT" install -y -qq --no-install-recommends $(php_packages) $(database_packages) $SYSTEM_PACKAGES $EXTRA_SYSTEM_PACKAGES || return 1
     # An image can hold another PHP, and the project's version must answer to `php`.
     if [ "$STACK" = "laravel" ]; then
         update-alternatives --set php "/usr/bin/php$PHP_VERSION" || return 1
@@ -315,7 +318,15 @@ step install-browser-tools install_browser_tools &
 step install-skills install_skills &
 step install-mailpit install_mailpit &
 step install-system-packages install_system_packages
-step_succeeded install-system-packages && write_installed_versions
+if ! step_succeeded install-system-packages; then
+    # See the top of this file. The session page shows the setup output, so the log goes there: its start
+    # names the source that did not answer, its end the package apt stopped at.
+    wait
+    log "install-system-packages failed: no snapshot is kept, and the next session runs the setup again"
+    { head -n 12; echo "..."; tail -n 8; } <"$LOG_DIR/install-system-packages.log"
+    exit 1
+fi
+write_installed_versions
 if [ "$STACK" = "laravel" ]; then
     step configure-php configure_php
     step configure-nginx configure_nginx

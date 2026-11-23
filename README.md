@@ -176,7 +176,7 @@ Once for all projects, on claude.ai/code: environment selector, then **New envir
 - **Setup script**: paste `environment-setup.sh`.
 - No variable and no secret.
 
-When the clone of this repository fails, the setup script exits 1 and the session does not start: that is safer than a snapshot with no guard.
+When the clone of this repository fails, the setup script exits 1 and the session does not start: that is safer than a snapshot with no guard. It does the same when the system packages cannot be installed (an apt source that is down, or slower than the limits of `apt_get` in `lib.sh`): nothing else can work without them, the platform keeps no snapshot of a script that failed, and the next session runs the setup again. Any other step that fails is reported to the agent as a `PROBLEM`, in a snapshot that is kept.
 
 ## Change it
 
@@ -189,7 +189,7 @@ When the clone of this repository fails, the setup script exits 1 and the sessio
 ## Limits
 
 - 4 vCPU, 16 GB, 30 GB. The VM is reclaimed when idle: push before waiting.
-- The image's apt sources ship PHP 8.3, MySQL 8.0 and PostgreSQL 16. For another version, `setup.sh` adds the Ondřej Surý source for PHP, the MySQL LTS source for MySQL, or the PostgreSQL source (PGDG).
+- The image's apt sources ship PHP 8.3, MySQL 8.0 and PostgreSQL 16. For another version, `setup.sh` adds the Ondřej Surý source for PHP, the MySQL LTS source for MySQL, or the PostgreSQL source (PGDG). The PHP source has two hosts, and the first that answers is used (`ONDREJ_PHP_SOURCES` in `packages.sh`); the two others have one, so when it is down the setup fails within about five minutes and the session does not start.
 - No preview URL for a person: the videos replace it.
 - Sub-agents share one VM and one `test` database, so implement sub-agents run one after another. A sub-agent cannot start another sub-agent.
 

@@ -18,10 +18,10 @@ install_tool_versions() {
     has_project_file mise.toml || has_project_file .mise.toml || has_project_file .tool-versions || return 0
 
     if ! command -v mise >/dev/null; then
-        apt-get install -y -qq --no-install-recommends extrepo || return 1
+        apt_get "$APT_INSTALL_LIMIT" install -y -qq --no-install-recommends extrepo || return 1
         extrepo enable mise || return 1
-        apt-get update -qq || return 1
-        apt-get install -y -qq --no-install-recommends mise || return 1
+        apt_get "$APT_UPDATE_LIMIT" update -qq || return 1
+        apt_get "$APT_INSTALL_LIMIT" install -y -qq --no-install-recommends mise || return 1
     fi
     mise trust --yes "$ROOT_DIR" >/dev/null 2>&1
     (cd "$ROOT_DIR" && mise install --yes) || return 1

@@ -34,6 +34,7 @@ run_cell() {
     docker run --rm --platform linux/amd64 \
         -v "$checkout:/src/cloud-env:ro" -v "$out:/out" -v "$here/fixtures:/fixtures:ro" -v "$here/inside.sh:/inside.sh:ro" \
         -e CELL_PHP="$php" -e CELL_DATABASE="$database" -e CELL_FIXTURE="$fixture" \
+        -e CLOUD_ENV_APT_UPDATE_LIMIT=600 -e CLOUD_ENV_APT_INSTALL_LIMIT=1800 \
         "$image" bash /inside.sh >"$out/run.log" 2>&1
     printf '%-28s %s (setup %s)\n' "$name" "$(tail -n 1 "$out/run.log")" "$(grep -m1 '^setup:' "$out/run.log" | cut -d' ' -f2-)"
 }
