@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prints what a Laravel project says about itself, as shell assignments.
+"""Prints what a project says about itself, as shell assignments.
 
 setup.sh runs this once per snapshot, before PHP exists in the VM. The output is sourced by scripts
 that run as root and ends up in apt package names, so only a strict format leaves this file. A value
@@ -12,6 +12,11 @@ import sys
 
 # The MySQL apt source has one series per LTS, and the image ships 8.0.
 SUPPORTED_MYSQL_VERSIONS = ('8.0', '8.4')
+# The image ships PostgreSQL 16, and the PostgreSQL apt source (PGDG) the newer ones.
+SUPPORTED_POSTGRES_VERSIONS = ('16', '17', '18')
+# The DB_CONNECTION of Laravel, as an engine of this VM. sqlite keeps the default: a real app moves to a server.
+ENGINES = {'mysql': 'mysql', 'mariadb': 'mysql', 'pgsql': 'pgsql'}
+DATABASE_IMAGE = re.compile(r'\b(mysql|mariadb|postgres|postgis/postgis):(\d+)(?:\.(\d+))?')
 INSTALL_COMMANDS = ('src/App/Console/Commands/Install.php', 'app/Console/Commands/Install.php')
 
 
@@ -62,11 +67,47 @@ def php_version(root, composer):
     return f'8.{max(map(int, minors))}' if minors else None
 
 
+def workflows(root):
+    return [workflow.read_text(errors='ignore') for workflow in sorted((root / '.github/workflows').glob('*.y*ml'))]
+
+
 def mysql_version(root):
-    for workflow in sorted((root / '.github/workflows').glob('*.y*ml')):
-        match = re.search(r'\bmysql:(\d+\.\d+)', workflow.read_text(errors='ignore'))
+    for workflow in workflows(root):
+        match = re.search(r'\bmysql:(\d+\.\d+)', workflow)
         if match:
             return match.group(1) if match.group(1) in SUPPORTED_MYSQL_VERSIONS else None
+
+    return None
+
+
+def postgres_version(root):
+    for workflow in workflows(root):
+        match = re.search(r'\b(?:postgres|postgis/postgis):(\d+)', workflow)
+        if match:
+            return match.group(1) if match.group(1) in SUPPORTED_POSTGRES_VERSIONS else None
+
+    return None
+
+
+def env_example_connection(root):
+    try:
+        match = re.search(r'^DB_CONNECTION=["\']?(\w+)', (root / '.env.example').read_text(errors='ignore'), re.MULTILINE)
+    except OSError:
+        return None
+
+    return ENGINES.get(match.group(1)) if match else None
+
+
+# What the project declares first, then the first database image of its CI.
+def database_engine(root):
+    engine = env_example_connection(root)
+    if engine:
+        return engine
+
+    for workflow in workflows(root):
+        match = DATABASE_IMAGE.search(workflow)
+        if match:
+            return 'pgsql' if 'postgres' in match.group(1) else 'mysql'
 
     return None
 
@@ -86,7 +127,27 @@ def app_title(root):
     return ' '.join(word.capitalize() for word in words) + ' Cloud' if words else None
 
 
+# Any repository that is not a Laravel project is a custom one: its .claude/cloud.sh says how to run it.
+def detect_custom(root):
+    values = {
+        'STACK': 'custom',
+        'DATABASE_ENGINE': database_engine(root) or 'none',
+        'MYSQL_VERSION': mysql_version(root),
+        'POSTGRES_VERSION': postgres_version(root),
+        'APP_DATABASE': re.sub(r'[^a-z0-9]+', '_', root.name.lower()).strip('_') or None,
+        'APP_TITLE': app_title(root),
+        # No page is known to answer: the project names one.
+        'SITE_CHECK_PATH': '',
+        'SITE_LOGIN_PATH': '',
+    }
+
+    return {name: value for name, value in values.items() if value is not None}
+
+
 def detect(root):
+    if not (root / 'artisan').is_file():
+        return detect_custom(root)
+
     composer = read_json(root / 'composer.json')
     packages = required_packages(composer)
     has_admin_routes = (root / 'routes/admin.php').is_file()
@@ -95,8 +156,11 @@ def detect(root):
     login_path = '/admin/login' if has_filament_login else None
 
     values = {
+        'STACK': 'laravel',
         'PHP_VERSION': php_version(root, composer),
+        'DATABASE_ENGINE': database_engine(root),
         'MYSQL_VERSION': mysql_version(root),
+        'POSTGRES_VERSION': postgres_version(root),
         'APP_DATABASE': re.sub(r'[^a-z0-9]+', '_', root.name.lower()).strip('_') or None,
         'APP_TITLE': app_title(root),
         'SITE_CHECK_PATH': login_path,

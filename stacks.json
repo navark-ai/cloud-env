@@ -1,0 +1,58 @@
+{
+  "comment": "What this version of cloud-env supports, for a reader such as Navark's setup wizard. Kept in step with defaults.sh, detect.py and the README's table; tests/test_manifest.py checks it.",
+  "version": "v3.1.0",
+  "environment": {
+    "name": "Navark",
+    "setupScript": "environment-setup.sh",
+    "allowedDomains": "allowed-domains.txt",
+    "networkAccess": "Limited",
+    "allowPackageManagers": true,
+    "variables": "none",
+    "oneForEveryStack": true
+  },
+  "stacks": [
+    {
+      "id": "laravel",
+      "label": "Laravel",
+      "detectedBy": "an artisan file at the root of the repository",
+      "projectFile": "optional",
+      "template": "templates/cloud.sh",
+      "languages": {
+        "php": { "versions": ["8.2", "8.3", "8.4", "8.5"], "default": "8.3", "detectedFrom": "require.php of composer.json, raised by composer.lock" }
+      },
+      "databases": ["mysql", "pgsql"],
+      "defaultDatabase": "mysql",
+      "services": ["redis", "mailpit", "horizon", "reverb"]
+    },
+    {
+      "id": "custom",
+      "label": "Another stack (Python, Node, Ruby, Go, ...)",
+      "detectedBy": "any other repository",
+      "projectFile": "required",
+      "template": "templates/custom.sh",
+      "examples": [{ "label": "Django on PostgreSQL", "file": "templates/custom-django.sh", "tested": true }],
+      "languages": {
+        "image": "Python 3 with pip, uv and poetry; Node 20, 21 and 22; Ruby 3.1 to 3.3 with bundler; Go; Rust; Java 21",
+        "otherVersions": "mise, from a mise.toml, .mise.toml or .tool-versions in the repository"
+      },
+      "packageManagers": ["npm", "pnpm", "yarn", "uv", "poetry", "pip", "bundler", "go"],
+      "databases": ["mysql", "pgsql", "none"],
+      "defaultDatabase": "none",
+      "services": ["redis", "mailpit"]
+    }
+  ],
+  "databases": {
+    "mysql": { "label": "MySQL", "versions": ["8.0", "8.4"], "default": "8.0", "user": "root", "port": 3306, "detectedFrom": "DB_CONNECTION of .env.example, then the first mysql:x.y image in .github/workflows" },
+    "pgsql": { "label": "PostgreSQL", "versions": ["16", "17", "18"], "default": "16", "user": "postgres", "port": 5432, "detectedFrom": "DB_CONNECTION of .env.example, then the first postgres:NN image in .github/workflows" },
+    "none": { "label": "No database" }
+  },
+  "ownEnvironment": {
+    "docs": "https://code.claude.com/docs/en/cloud-environments",
+    "keep": "Clone this repository at a version and run setup.sh at the end of your own setup script, or the session has no guard and no hooks for the Navark flow."
+  },
+  "references": [
+    { "name": "mise", "url": "https://mise.jdx.dev", "for": "Any language version the image does not ship (Python, Ruby, Node, Go, Java, ...). cloud-env installs it when the repository has a mise.toml or .tool-versions." },
+    { "name": "Dev Container Features", "url": "https://containers.dev/features", "for": "Install scripts per tool (languages, CLIs, databases), maintained by the Dev Containers community: a source to copy into a setup script. Not run by cloud-env." },
+    { "name": "Railpack", "url": "https://github.com/railwayapp/railpack", "for": "How a project of a given language is detected, installed and started, from Railway's builder. A reference for writing a custom .claude/cloud.sh. Not run by cloud-env." }
+  ]
+}

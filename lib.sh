@@ -2,16 +2,20 @@
 # Shared by setup.sh, session-start.sh and the commands in bin/. All of them run from /opt/cloud-env.
 #
 # The project's values come, in this order, from defaults.sh, from what setup.sh detected once for
-# this snapshot, and from the optional .claude/cloud.sh in its repository. A copy of that file stays
+# this snapshot, from the file of its stack (stacks/<STACK>.sh, functions only), and from the optional
+# .claude/cloud.sh in its repository. A copy of that file stays
 # in the state folder: a session can check out a branch that does not have it, and the services must
 # still start. Each script refreshes the copy from the checkout when the checkout has the file.
 
 CLOUD_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-STATE_DIR="/var/lib/cloud-env"
-LOG_DIR="/var/log/cloud-env"
+# Overridable for the tests only.
+STATE_DIR="${CLOUD_ENV_STATE_DIR:-/var/lib/cloud-env}"
+LOG_DIR="${CLOUD_ENV_LOG_DIR:-/var/log/cloud-env}"
 PROJECT_FILE=".claude/cloud.sh"
 INSTALLED_PROJECT_FILE="$STATE_DIR/project.sh"
 DETECTED_FILE="$STATE_DIR/detected.sh"
+# What setup.sh installed: the stack, PHP and the database server. See "Versions after a push" in the README.
+INSTALLED_FILE="$STATE_DIR/installed.sh"
 ROOT_DIR_FILE="$STATE_DIR/root-dir"
 # The values the tools of a flow read (README, "The flow"). Its path and its keys are a contract with Navark.
 VALUES_FILE="$STATE_DIR/values.sh"
@@ -21,8 +25,13 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 export COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_NO_INTERACTION=1
 export DEBIAN_FRONTEND=noninteractive
+# The tools of a project's mise.toml (stacks/custom.sh) come first, for the workers and the commands here.
+MISE_SHIMS="/root/.local/share/mise/shims"
+[ -d "$MISE_SHIMS" ] && export PATH="$MISE_SHIMS:$PATH"
 
-# A cloud session has one repository, under /home/user.
+HOME_DIR="${CLOUD_ENV_HOME_DIR:-/home/user}"
+
+# A cloud session has one repository, under /home/user. A Laravel project wins, then any repository.
 find_root_dir() {
     local candidate
 
@@ -31,8 +40,8 @@ find_root_dir() {
         return 0
     fi
 
-    for candidate in /home/user/*/artisan; do
-        if [ -f "$candidate" ]; then
+    for candidate in "$HOME_DIR"/*/artisan "$HOME_DIR"/*/.git; do
+        if [ -e "$candidate" ]; then
             dirname "$candidate"
             return 0
         fi
@@ -52,6 +61,13 @@ load_project_values() {
         source "$DETECTED_FILE"
     fi
 
+    case "$STACK" in
+        laravel | custom) ;;
+        *) STACK="custom" ;;
+    esac
+    # shellcheck disable=SC1090
+    source "$CLOUD_DIR/stacks/$STACK.sh"
+
     if [ -n "$ROOT_DIR" ] && [ -f "$ROOT_DIR/$PROJECT_FILE" ]; then
         cp "$ROOT_DIR/$PROJECT_FILE" "$INSTALLED_PROJECT_FILE"
     fi
@@ -63,6 +79,17 @@ load_project_values() {
         # shellcheck disable=SC1090
         source "$INSTALLED_PROJECT_FILE"
         [[ "$shell_flags" == *u* ]] && set -u
+    fi
+
+    # A session runs on what the snapshot has, whatever the checkout asks for now: a server that is not
+    # installed cannot answer. session-start.sh compares the two and warns.
+    if [ -z "${CLOUD_ENV_SETUP:-}" ] && [ -f "$INSTALLED_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALLED_FILE"
+        PHP_VERSION="${INSTALLED_PHP_VERSION:-$PHP_VERSION}"
+        DATABASE_ENGINE="${INSTALLED_DATABASE_ENGINE:-$DATABASE_ENGINE}"
+        MYSQL_VERSION="${INSTALLED_MYSQL_VERSION:-$MYSQL_VERSION}"
+        POSTGRES_VERSION="${INSTALLED_POSTGRES_VERSION:-$POSTGRES_VERSION}"
     fi
 
     return 0
@@ -99,6 +126,62 @@ write_flow_values() {
     } >"$temporary" && chmod 600 "$temporary" && mv -f "$temporary" "$VALUES_FILE"
 }
 
+write_installed_versions() {
+    local name temporary
+
+    temporary="$(mktemp "$STATE_DIR/installed.XXXXXX")" || return 1
+    for name in STACK PHP_VERSION DATABASE_ENGINE MYSQL_VERSION POSTGRES_VERSION; do
+        printf 'INSTALLED_%s=%s\n' "$name" "$(shell_quote "${!name-}")"
+    done >"$temporary" && mv -f "$temporary" "$INSTALLED_FILE"
+}
+
+# What the checkout asks for now, on one line: stack, PHP, engine, MySQL, PostgreSQL. The same order as
+# setup.sh reads them (defaults.sh, a new detection, the project's file), in a subshell, so nothing of this
+# session changes.
+wanted_versions() {
+    (
+        set +u
+        # shellcheck source=defaults.sh
+        source "$CLOUD_DIR/defaults.sh"
+        # detect.py prints only NAME='value' lines of a strict format.
+        eval "$(python3 -I "$CLOUD_DIR/detect.py" "$ROOT_DIR" 2>/dev/null)"
+        if [ -f "$ROOT_DIR/$PROJECT_FILE" ]; then
+            # shellcheck disable=SC1090
+            source "$ROOT_DIR/$PROJECT_FILE" >/dev/null 2>&1
+        elif [ -f "$INSTALLED_PROJECT_FILE" ]; then
+            # shellcheck disable=SC1090
+            source "$INSTALLED_PROJECT_FILE" >/dev/null 2>&1
+        fi
+        echo "$STACK $PHP_VERSION $DATABASE_ENGINE $MYSQL_VERSION $POSTGRES_VERSION"
+    )
+}
+
+database_label() {
+    case "$1" in
+        mysql) echo "MySQL $2" ;;
+        pgsql) echo "PostgreSQL $3" ;;
+        *) echo "no database" ;;
+    esac
+}
+
+# Prints a WARNING line for each difference between the snapshot ($INSTALLED_*) and the checkout
+# (wanted_versions), except PHP, which session-start.sh installs and reports itself.
+version_warnings() {
+    local stack="$1" engine="$3" mysql="$4" postgres="$5" installed wanted
+    local rebuild="A new snapshot installs it: change the number in the environment's setup script (README, \"Change it\")."
+
+    if [ "$stack" != "${INSTALLED_STACK:-$stack}" ]; then
+        echo "WARNING: the checkout is a $stack project, and this snapshot was set up for the $INSTALLED_STACK stack. $rebuild"
+    fi
+
+    installed="$(database_label "${INSTALLED_DATABASE_ENGINE:-$engine}" "${INSTALLED_MYSQL_VERSION:-$mysql}" "${INSTALLED_POSTGRES_VERSION:-$postgres}")"
+    wanted="$(database_label "$engine" "$mysql" "$postgres")"
+    if [ "$installed" != "$wanted" ]; then
+        echo "WARNING: the checkout asks for $wanted, and this snapshot has $installed, which this session uses. A database is never replaced in a session: its data would not follow. $rebuild"
+    fi
+    return 0
+}
+
 # Runs a step, keeps its output in a log and records the elapsed seconds, so a
 # failed or slow step can be read after the setup script is over.
 step() {
@@ -116,6 +199,70 @@ step() {
     log "end $name status=$status ${elapsed}s"
 
     return "$status"
+}
+
+# Runs a query on the application database, or on $2 when given, and prints rows with tab-separated fields.
+database_query() {
+    local query="$1" database="${2:-$APP_DATABASE}"
+
+    case "$DATABASE_ENGINE" in
+        mysql) mysql -uroot -N -B "$database" -e "$query" ;;
+        pgsql) psql -h 127.0.0.1 -U postgres -d "$database" -X -q -t -A -F $'\t' -v ON_ERROR_STOP=1 -c "$query" ;;
+        *) return 1 ;;
+    esac
+}
+
+# The .env lines a Laravel project needs for the database.
+database_env() {
+    case "$DATABASE_ENGINE" in
+        mysql) printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=3306\nDB_DATABASE=%s\nDB_USERNAME=root\nDB_PASSWORD=\n' "$APP_DATABASE" ;;
+        pgsql) printf 'DB_CONNECTION=pgsql\nDB_HOST=127.0.0.1\nDB_PORT=5432\nDB_DATABASE=%s\nDB_USERNAME=postgres\nDB_PASSWORD=\n' "$APP_DATABASE" ;;
+    esac
+    return 0
+}
+
+# One line for the agent: the server, how to connect, the databases.
+database_summary() {
+    case "$DATABASE_ENGINE" in
+        mysql) echo "MySQL $MYSQL_VERSION (\`root\`, no password, on 127.0.0.1:3306, databases \`$APP_DATABASE\` and \`$TEST_DATABASE\`)" ;;
+        pgsql) echo "PostgreSQL $POSTGRES_VERSION (\`postgres\`, no password, on 127.0.0.1:5432, databases \`$APP_DATABASE\` and \`$TEST_DATABASE\`)" ;;
+        *) echo "no database server" ;;
+    esac
+}
+
+start_database() {
+    case "$DATABASE_ENGINE" in
+        mysql) start_mysql ;;
+        pgsql) start_postgres ;;
+        *) return 0 ;;
+    esac
+}
+
+stop_database() {
+    case "$DATABASE_ENGINE" in
+        mysql) stop_mysql_server ;;
+        pgsql) service postgresql stop >/dev/null 2>&1 ;;
+    esac
+    return 0
+}
+
+postgres_answers() {
+    pg_isready -q -h 127.0.0.1 -p 5432 -t 1 >/dev/null 2>&1
+}
+
+# postgresql-common ships an init script, so `service` works with no systemd. Only the cluster of
+# POSTGRES_VERSION is kept: setup.sh drops the image's other one.
+start_postgres() {
+    postgres_answers && return 0
+    service postgresql start >/dev/null 2>&1
+
+    local attempt
+    for attempt in $(seq 1 60); do
+        postgres_answers && return 0
+        sleep 0.5
+    done
+
+    return 1
 }
 
 mysql_answers() {
@@ -173,13 +320,6 @@ start_redis() {
     done
 
     return 1
-}
-
-# php-fpm runs as root: the agent and the site write the same storage/ files, and the VM is single-use.
-start_web() {
-    mkdir -p /run/php
-    pgrep -x "php-fpm$PHP_VERSION" >/dev/null || "php-fpm$PHP_VERSION" --allow-to-run-as-root --daemonize
-    pgrep -x nginx >/dev/null || nginx
 }
 
 # GitHub's download host can reset an HTTP/2 stream mid-file (curl: (92) ... INTERNAL_ERROR), and the
@@ -302,16 +442,13 @@ frontend_fingerprint() {
 migrations_fingerprint() {
     (
         cd "$ROOT_DIR" || exit
+        local paths
+        read -r -a paths <<<"$MIGRATION_PATHS"
         {
-            git ls-files -s -- database/migrations database/schema 'modules/*/migrations/*' 'modules/*/Database/migrations/*'
-            git ls-files --others --exclude-standard -- database/migrations 'modules/*/migrations/*' 'modules/*/Database/migrations/*'
+            git ls-files -s -- "${paths[@]}"
+            git ls-files --others --exclude-standard -- "${paths[@]}"
         } 2>/dev/null | sha256sum | cut -d' ' -f1
     )
-}
-
-# A PWA plugin can refuse the larger files of an unminified build, and only stops the build at the end.
-build_frontend() {
-    npm run build -- --minify false || npm run build
 }
 
 state_changed() {
@@ -320,4 +457,20 @@ state_changed() {
 
 remember_state() {
     printf '%s' "$2" >"$STATE_DIR/$1"
+}
+
+# For cloud-sync: runs a command when a fingerprint changed, keeps its output in a log, and says what it did.
+# Usage: sync_when_changed <state name> <label> <fingerprint> <command...>
+sync_when_changed() {
+    local name="$1" label="$2" print="$3"
+    shift 3
+
+    state_changed "$name" "$print" || return 0
+    if "$@" >"$LOG_DIR/sync-$name.log" 2>&1; then
+        remember_state "$name" "$print"
+        echo "$label: done"
+    else
+        echo "$label: FAILED, see $LOG_DIR/sync-$name.log"
+        return 1
+    fi
 }

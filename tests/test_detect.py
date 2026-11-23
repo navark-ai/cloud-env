@@ -9,15 +9,18 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DETECT = ROOT / 'detect.py'
 DEFAULTS = ROOT / 'defaults.sh'
+LARAVEL_STACK = ROOT / 'stacks/laravel.sh'
 FIND_PASSWORD = ROOT / 'find-seeded-password.php'
 
 
 class ProjectTestCase(unittest.TestCase):
-    def project(self, name='my-project', **files):
+    def project(self, name='my-project', laravel=True, **files):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = pathlib.Path(directory.name) / name
         root.mkdir()
+        if laravel:
+            (root / 'artisan').write_text('#!/usr/bin/env php\n')
         for path, content in files.items():
             file = root / path.replace('__', '/')
             file.parent.mkdir(parents=True, exist_ok=True)
@@ -158,9 +161,47 @@ class DetectTest(ProjectTestCase):
         self.assertEqual(values['USES_REVERB'], "'false'")
 
 
+class StackAndDatabaseTest(ProjectTestCase):
+    def test_a_project_with_artisan_is_laravel(self):
+        self.assertEqual(self.detect(self.project())['STACK'], "'laravel'")
+
+    def test_any_other_repository_is_custom_with_no_site_check(self):
+        values = self.detect(self.project(laravel=False, **{'pyproject.toml': '[project]\nname = "x"\n'}))
+        self.assertEqual(values['STACK'], "'custom'")
+        self.assertEqual(values['DATABASE_ENGINE'], "'none'")
+        self.assertEqual(values['SITE_CHECK_PATH'], "''")
+        self.assertNotIn('PHP_VERSION', values)
+
+    def test_laravel_keeps_the_default_engine_with_nothing_to_read(self):
+        self.assertNotIn('DATABASE_ENGINE', self.detect(self.project()))
+
+    def test_the_env_example_decides_the_engine(self):
+        cases = {'DB_CONNECTION=pgsql': "'pgsql'", 'DB_CONNECTION="pgsql"': "'pgsql'", 'DB_CONNECTION=mysql': "'mysql'", 'DB_CONNECTION=mariadb': "'mysql'"}
+        for line, expected in cases.items():
+            root = self.project(**{'.env.example': f'APP_NAME=x\n{line}\n', '.github__workflows__ci.yml': 'image: mysql:8.4'})
+            self.assertEqual(self.detect(root)['DATABASE_ENGINE'], expected, line)
+
+    def test_a_sqlite_env_example_reads_the_ci_instead(self):
+        root = self.project(**{'.env.example': 'DB_CONNECTION=sqlite\n', '.github__workflows__ci.yml': 'image: postgres:17'})
+        self.assertEqual(self.detect(root)['DATABASE_ENGINE'], "'pgsql'")
+        self.assertNotIn('DATABASE_ENGINE', self.detect(self.project(**{'.env.example': 'DB_CONNECTION=sqlite\n'})))
+
+    def test_the_first_database_image_of_the_ci_decides_the_engine(self):
+        root = self.project(laravel=False, **{'.github__workflows__a.yml': 'image: postgres:16-alpine', '.github__workflows__b.yml': 'image: mysql:8.4'})
+        self.assertEqual(self.detect(root)['DATABASE_ENGINE'], "'pgsql'")
+
+    def test_postgres_version_comes_from_the_ci_image(self):
+        cases = {'image: postgres:16': "'16'", 'image: postgres:17.2': "'17'", 'image: postgres:18-alpine': "'18'", 'image: postgis/postgis:17-3.5': "'17'"}
+        for line, expected in cases.items():
+            root = self.project(**{'.github__workflows__ci.yml': line})
+            self.assertEqual(self.detect(root)['POSTGRES_VERSION'], expected, line)
+        for line in ['image: postgres:13', 'image: postgres:latest', 'image: mysql:8.4']:
+            self.assertNotIn('POSTGRES_VERSION', self.detect(self.project(**{'.github__workflows__ci.yml': line})), line)
+
+
 class WorkersFromDefaultsTest(unittest.TestCase):
     def workers(self, horizon, reverb):
-        script = f'source "{DEFAULTS}"; USES_HORIZON={horizon}; USES_REVERB={reverb}; background_workers'
+        script = f'source "{DEFAULTS}"; source "{LARAVEL_STACK}"; USES_HORIZON={horizon}; USES_REVERB={reverb}; background_workers'
         return subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True).stdout.splitlines()
 
     def test_each_detected_package_gives_its_worker(self):
