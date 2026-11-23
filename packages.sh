@@ -8,6 +8,12 @@ IMAGE_POSTGRES_VERSION="16"
 ONDREJ_PHP_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
 MYSQL_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBCA43417C3B485DD128EC6D4B7B3B788A8D3785C"
 PGDG_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+# Launchpad serves the same archive from two front ends, and one can fail while the other answers: on
+# 2026-11-23 the first one gave a 503 after 6 to 14 seconds to most requests while the second answered
+# in under a second. The first that answers is used. The second is plain HTTP, like MySQL's source: apt
+# checks every index and package against the key above, whatever the transport. Its host is among the
+# default allowed domains of a cloud environment ("Allow package managers").
+ONDREJ_PHP_SOURCES="https://ppa.launchpadcontent.net/ondrej/php/ubuntu http://ppa.launchpad.net/ondrej/php/ubuntu"
 
 php_at_least() {
     [ "$(printf '%s\n%s\n' "$1" "$PHP_VERSION" | sort -V | head -n 1)" = "$1" ]
@@ -29,13 +35,38 @@ php_packages() {
 add_apt_source() {
     local name="$1" key_url="$2" source="$3"
 
-    curl -fsSL "$key_url" | gpg --dearmor --yes -o "/usr/share/keyrings/$name.gpg" || return 1
+    curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 "$key_url" \
+        | gpg --dearmor --yes -o "/usr/share/keyrings/$name.gpg" || return 1
     echo "deb [signed-by=/usr/share/keyrings/$name.gpg] $source" >"/etc/apt/sources.list.d/$name.list"
 }
 
+# Prints the first of the given apt archives whose index answers within 5 seconds, twice in a row: a front
+# end that fails one request in two must not pass. When none does, prints the first one, and apt then
+# fails within its limits. Usage: answering_source <archive url>...
+answering_source() {
+    local source index
+
+    for source in "$@"; do
+        index="$source/dists/noble/InRelease"
+        if curl -fsS -o /dev/null --connect-timeout 5 --max-time 5 "$index" \
+            && curl -fsS -o /dev/null --connect-timeout 5 --max-time 5 "$index"; then
+            echo "$source"
+            return 0
+        fi
+        echo "cloud-env: $source does not answer in time" >&2
+    done
+
+    echo "$1"
+}
+
 add_version_sources() {
+    local source
+
     if [ "$STACK" = "laravel" ] && [ "$PHP_VERSION" != "$IMAGE_PHP_VERSION" ]; then
-        add_apt_source ondrej-php "$ONDREJ_PHP_KEY_URL" "https://ppa.launchpadcontent.net/ondrej/php/ubuntu noble main" || return 1
+        # shellcheck disable=SC2086
+        source="$(answering_source $ONDREJ_PHP_SOURCES)"
+        echo "cloud-env: PHP $PHP_VERSION comes from $source" >&2
+        add_apt_source ondrej-php "$ONDREJ_PHP_KEY_URL" "$source noble main" || return 1
     fi
     if [ "$DATABASE_ENGINE" = "mysql" ] && [ "$MYSQL_VERSION" != "$IMAGE_MYSQL_VERSION" ]; then
         add_apt_source mysql "$MYSQL_KEY_URL" "http://repo.mysql.com/apt/ubuntu noble mysql-$MYSQL_VERSION-lts" || return 1
@@ -95,9 +126,9 @@ switch_php_version() {
     PHP_VERSION="$wanted"
     if [ ! -x "/usr/sbin/php-fpm$wanted" ]; then
         add_version_sources || return 1
-        apt-get update -qq || return 1
+        apt_get "$APT_UPDATE_LIMIT" update -qq || return 1
         # shellcheck disable=SC2046
-        apt-get install -y -qq --no-install-recommends $(php_packages) || return 1
+        apt_get "$APT_INSTALL_LIMIT" install -y -qq --no-install-recommends $(php_packages) || return 1
     fi
     update-alternatives --set php "/usr/bin/php$wanted" || return 1
     ln -sf /usr/bin/php "/usr/local/bin/php${wanted//./}"

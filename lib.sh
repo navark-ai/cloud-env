@@ -328,6 +328,21 @@ download() {
     curl -fsSL --http1.1 --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -o "$2" "$1"
 }
 
+# Seconds for one apt call. Past them the snapshot is lost anyway: the platform keeps it only when the
+# whole setup takes about five minutes. Overridable for the tests only: under emulation apt is far slower.
+APT_UPDATE_LIMIT="${CLOUD_ENV_APT_UPDATE_LIMIT:-60}"
+APT_INSTALL_LIMIT="${CLOUD_ENV_APT_INSTALL_LIMIT:-240}"
+
+# apt has no limit of its own on a whole run: against a source that answers slowly or with errors, it went
+# on for 20 minutes (2026-11-23, Launchpad). The run gets a limit, and a connection that stalls 15 seconds.
+# Usage: apt_get <seconds> <apt-get arguments...>
+apt_get() {
+    local limit="$1"
+    shift
+
+    timeout --kill-after=10 "$limit" apt-get -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 "$@"
+}
+
 install_mailpit() {
     local archive status
 
