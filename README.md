@@ -148,6 +148,8 @@ The worker gets it at the start of each run:
 
 No copy of the flow stays here. When `get_flow` or the download fails, the worker does not touch the ticket: it sends a notification that says what failed and stops. After a restart or a later wake, a worker that finds `.scratch/flow/` missing calls `get_flow` again, and names a changed revision in its retrospective.
 
+Navark records the workspace’s **Agent delivery language** when each run opens. The flow reads `run.deliveryLocale` from `get_flow` and uses it for the report, pull request, replies, demo captions and narration, including after a resume. The VM supports both languages in the same snapshot. The Laravel seeders keep control of each demo account’s interface language.
+
 What this repository gives the flow, and what a flow may count on:
 
 - **The values file**, `/var/lib/cloud-env/values.sh`, written by `session-start.sh` at every session start (`write_flow_values` in `lib.sh`). One `KEY='value'` line per key, single-quoted, for any POSIX shell to source; mode 600. The flow's tools source it instead of `lib.sh`, so they do not depend on how this repository is laid out. Keys:
@@ -179,6 +181,21 @@ Once for all projects, on claude.ai/code: environment selector, then **New envir
 When the clone of this repository fails, the setup script exits 1 and the session does not start: that is safer than a snapshot with no guard. It does the same when the system packages cannot be installed (an apt source that is down, or slower than the limits of `apt_get` in `lib.sh`): nothing else can work without them, the platform keeps no snapshot of a script that failed, and the next session runs the setup again. Any other step that fails is reported to the agent as a `PROBLEM`, in a snapshot that is kept.
 
 ## Change it
+
+To publish a VM version (for example, `v3.2.2`):
+
+1. Pick an unused tag with `git ls-remote --tags origin`. Set `CLOUD_ENV_VERSION` in `environment-setup.sh` and `version` in `stacks.json` to that tag in the same pull request.
+2. Run the repository checks below and merge the pull request into `main`. Copy its merge commit SHA from GitHub.
+3. Tag that exact commit and push the tag. Replace `MERGE_SHA` with the SHA from step 2.
+
+   ```sh
+   git fetch origin main --tags
+   git tag -a v3.2.2 MERGE_SHA -m "cloud-env v3.2.2"
+   git push origin refs/tags/v3.2.2
+   git ls-remote --tags origin 'refs/tags/v3.2.2^{}'
+   ```
+
+4. Check that the last command prints the merge SHA. On claude.ai/code, edit the Navark environment, paste the tagged `environment-setup.sh` in **Setup script**, and save. A new session builds a snapshot with that version.
 
 - **The flow:** a pull request on Navark, in `resources/flows/default/`. It reaches every worker at Navark's next deploy: no version here, no new snapshot. A run that already downloaded the flow keeps its copy.
 - **A new version:** change `CLOUD_ENV_VERSION` in the environment's setup script. That text change also forces a new snapshot, for every project. There is no API for it, so a person or a browser agent edits the dialog. One environment means a release reaches every project at once: to try one first, create a second environment with the new version and run one session of a project there.
