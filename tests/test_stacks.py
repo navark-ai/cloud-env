@@ -1,5 +1,6 @@
 """Run with: python3 -m unittest discover tests"""
 import pathlib
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -46,6 +47,26 @@ declare -F install_dependencies sync_project >/dev/null && echo custom-functions
 background_workers | wc -l | tr -d ' '
 '''
         self.assertEqual(run(script).split(), ['custom-functions', '0'])
+
+    def test_laravel_leaves_seeded_account_languages_intact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = pathlib.Path(directory) / 'demo.sqlite'
+            with sqlite3.connect(database) as connection:
+                connection.execute('CREATE TABLE users (locale TEXT)')
+                connection.executemany('INSERT INTO users VALUES (?)', [('fr',), ('en',)])
+                connection.commit()
+
+                script = f'''
+source "{ROOT}/stacks/laravel.sh"
+php() {{ :; }}
+timeout() {{ shift; "$@"; }}
+database_query() {{
+    python3 -c 'import sqlite3, sys; db=sqlite3.connect(sys.argv[1]); db.execute(sys.argv[2]); db.commit()' "$DEMO_DB" "$1"
+}}
+install_application && install_demo_data
+'''
+                run(script, DEMO_DB=str(database), HAS_INSTALL_COMMAND='true', HAS_DEMO_SEEDER='true')
+                self.assertEqual(connection.execute('SELECT locale FROM users ORDER BY rowid').fetchall(), [('fr',), ('en',)])
 
 
 class DatabaseEnvTest(unittest.TestCase):

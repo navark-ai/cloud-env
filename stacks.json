@@ -1,6 +1,6 @@
 {
   "comment": "What this version of cloud-env supports, for a reader such as Navark's setup wizard. Kept in step with defaults.sh, detect.py and the README's table; tests/test_manifest.py checks it.",
-  "version": "v3.2.1",
+  "version": "v3.2.2",
   "environment": {
     "name": "Navark",
     "setupScript": "environment-setup.sh",

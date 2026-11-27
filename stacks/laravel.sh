@@ -2,11 +2,6 @@
 # Functions of the laravel stack: a repository with `artisan`. lib.sh sources this after the detected
 # values, so the project's .claude/cloud.sh can replace any of them.
 
-# Videos and captions are for a French reader. The tests use their own database.
-use_french_interface() {
-    database_query "UPDATE users SET locale = 'fr'" >/dev/null 2>&1 || true
-}
-
 # Fills the application database. Runs with the services up and .env in place.
 install_application() {
     if [ "$HAS_INSTALL_COMMAND" = "true" ]; then
@@ -16,7 +11,6 @@ install_application() {
     fi
 
     php artisan storage:link --no-interaction || true
-    use_french_interface
 }
 
 # Records for screens to show. The app must be usable without them.
@@ -24,7 +18,6 @@ install_demo_data() {
     [ "$HAS_DEMO_SEEDER" = "true" ] || return 0
 
     timeout 180 php artisan db:seed --class=DemoSeeder --force --no-interaction || return 1
-    use_french_interface
 }
 
 # Long-running workers, one per line: <name>|<command>|<port>. The command must show in `ps` as written,
