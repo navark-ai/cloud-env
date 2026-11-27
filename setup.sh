@@ -326,6 +326,7 @@ if ! step_succeeded install-system-packages; then
     { head -n 12; echo "..."; tail -n 8; } <"$LOG_DIR/install-system-packages.log"
     exit 1
 fi
+step install-kokoro timeout --kill-after=5s 150s bash "$CLOUD_DIR/kokoro/install.sh" &
 write_installed_versions
 if [ "$STACK" = "laravel" ]; then
     step configure-php configure_php
