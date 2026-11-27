@@ -1,4 +1,4 @@
-"""Read a JSON array of French captions from stdin and write numbered PCM WAV files."""
+"""Read captions from stdin and write numbered PCM WAV files in the requested language."""
 
 import json
 from pathlib import Path
@@ -10,8 +10,16 @@ import numpy as np
 import onnxruntime as ort
 
 
+VOICES = {"fr": ("ff_siwis", "fr-fr"), "en": ("af_heart", "en-us")}
+
+
 def main():
-    runtime, output = map(Path, sys.argv[1:])
+    if len(sys.argv) != 4 or sys.argv[2] not in VOICES:
+        raise SystemExit("Usage: kokoro-tts <fr|en> <output-directory>")
+
+    runtime = Path(sys.argv[1])
+    voice, language = VOICES[sys.argv[2]]
+    output = Path(sys.argv[3])
     captions = json.load(sys.stdin)
 
     options = ort.SessionOptions()
@@ -24,7 +32,7 @@ def main():
     kokoro = Kokoro.from_session(session, str(runtime / "voices-v1.0.bin"))
 
     for index, text in enumerate(captions):
-        samples, rate = kokoro.create(text, voice="ff_siwis", lang="fr-fr")
+        samples, rate = kokoro.create(text, voice=voice, lang=language)
         pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2")
         with wave.open(str(output / f"{index}.wav"), "wb") as audio:
             audio.setparams((1, 2, rate, 0, "NONE", "not compressed"))

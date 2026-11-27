@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the French TTS runtime while setup can reach the package index and model release.
+# Install the TTS runtime while setup can reach the package index and model release.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -31,10 +31,12 @@ download voices-v1.0.bin bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c
 "$runtime/venv/bin/python" -I -m pip --isolated install --disable-pip-version-check \
     --no-cache-dir --only-binary=:all: 'kokoro-onnx==0.6.1'
 
-printf '%s\n' '["Bonjour."]' | "$runtime/venv/bin/python" -I "$here/synthesize.py" "$runtime" "$downloads"
-cat >"$downloads/kokoro-fr" <<EOF
-#!/usr/bin/env bash
-exec "$runtime/venv/bin/python" -I "$runtime/synthesize.py" "$runtime" "\$@"
-EOF
+printf '%s\n' '["Bonjour."]' | "$runtime/venv/bin/python" -I "$here/synthesize.py" "$runtime" fr "$downloads"
+printf '%s\n' '["Hello."]' | "$runtime/venv/bin/python" -I "$here/synthesize.py" "$runtime" en "$downloads"
+printf '#!/usr/bin/env bash\nexec %q -I %q %q "$@"\n' \
+    "$runtime/venv/bin/python" "$runtime/synthesize.py" "$runtime" >"$downloads/kokoro-tts"
+printf '#!/usr/bin/env bash\nexec %q -I %q %q fr "$@"\n' \
+    "$runtime/venv/bin/python" "$runtime/synthesize.py" "$runtime" >"$downloads/kokoro-fr"
 cp "$here/synthesize.py" "$runtime/synthesize.py"
+install -m 755 "$downloads/kokoro-tts" "$bin_directory/kokoro-tts"
 install -m 755 "$downloads/kokoro-fr" "$bin_directory/kokoro-fr"
