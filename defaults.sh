@@ -32,7 +32,7 @@ POSTGRES_VERSION="16"
 # setup.sh adds pgsql for PostgreSQL.
 PHP_EXTENSIONS="fpm cli mysql redis gd imagick intl bcmath zip soap mbstring xml curl sqlite3 opcache gmp"
 # PDF work, Loom frames and QR checks. The laravel stack adds nginx and PHP.
-SYSTEM_PACKAGES="ffmpeg imagemagick jq lsof ghostscript poppler-utils zbar-tools"
+SYSTEM_PACKAGES="ffmpeg imagemagick jq lsof ghostscript poppler-utils zbar-tools python3-venv"
 EXTRA_SYSTEM_PACKAGES=""
 
 # Paths whose change asks cloud-sync for a migration, as git pathspecs.
